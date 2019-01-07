@@ -4,5 +4,5 @@ edition = "2018"
 name = "doom-fire"
 version = "0.1.0"
 [dependencies]
-ggez = "*"
 rand = "*"
+minifb = "0.11.2"

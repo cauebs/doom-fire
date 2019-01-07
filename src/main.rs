@@ -1,63 +1,49 @@
-extern crate ggez;
-extern crate rand;
-
-use ggez::{conf, event, graphics, Context, ContextBuilder, GameResult};
+use minifb::{Key, Scale, Window, WindowOptions};
 use rand::{thread_rng, Rng};
 
-const HEIGHT: usize = 600;
-const WIDTH: usize = 800;
-const SCALE: usize = 5;
-const ROWS: usize = (HEIGHT / SCALE);
-const COLS: usize = (WIDTH / SCALE);
-const MAX_COLOR: usize = 35;
-const COLORS: [RGB; 36] = [
-    RGB(7, 7, 7),
-    RGB(31, 7, 7),
-    RGB(47, 15, 7),
-    RGB(71, 15, 7),
-    RGB(87, 23, 7),
-    RGB(103, 31, 7),
-    RGB(119, 31, 7),
-    RGB(143, 39, 7),
-    RGB(159, 47, 7),
-    RGB(175, 63, 7),
-    RGB(191, 71, 7),
-    RGB(199, 71, 7),
-    RGB(223, 79, 7),
-    RGB(223, 87, 7),
-    RGB(223, 87, 7),
-    RGB(215, 95, 7),
-    RGB(215, 103, 15),
-    RGB(207, 111, 15),
-    RGB(207, 119, 15),
-    RGB(207, 127, 15),
-    RGB(207, 135, 23),
-    RGB(199, 135, 23),
-    RGB(199, 143, 23),
-    RGB(199, 151, 31),
-    RGB(191, 159, 31),
-    RGB(191, 159, 31),
-    RGB(191, 167, 39),
-    RGB(191, 167, 39),
-    RGB(191, 175, 47),
-    RGB(183, 175, 47),
-    RGB(183, 183, 47),
-    RGB(183, 183, 55),
-    RGB(207, 207, 111),
-    RGB(223, 223, 159),
-    RGB(239, 239, 199),
-    RGB(255, 255, 255),
+const ROWS: usize = 90;
+const COLS: usize = 160;
+
+const COLORS: [u32; 36] = [
+    0x0007_0707,
+    0x001f_0707,
+    0x002f_0f07,
+    0x0047_0f07,
+    0x0057_1707,
+    0x0067_1f07,
+    0x0077_1f07,
+    0x008f_2707,
+    0x009f_2f07,
+    0x00af_3f07,
+    0x00bf_4707,
+    0x00c7_4707,
+    0x00df_4f07,
+    0x00df_5707,
+    0x00df_5707,
+    0x00d7_5f07,
+    0x00d7_670f,
+    0x00cf_6f0f,
+    0x00cf_770f,
+    0x00cf_7f0f,
+    0x00cf_8717,
+    0x00c7_8717,
+    0x00c7_8f17,
+    0x00c7_971f,
+    0x00bf_9f1f,
+    0x00bf_9f1f,
+    0x00bf_a727,
+    0x00bf_a727,
+    0x00bf_af2f,
+    0x00b7_af2f,
+    0x00b7_b72f,
+    0x00b7_b737,
+    0x00cf_cf6f,
+    0x00df_df9f,
+    0x00ef_efc7,
+    0x00ff_ffff,
 ];
 
-struct RGB(u8, u8, u8);
-
-impl Into<graphics::Color> for &RGB {
-    fn into(self) -> graphics::Color {
-        let RGB(r, g, b) = self;
-        graphics::Color::from_rgb(*r, *g, *b)
-    }
-}
-
+#[derive(Clone, Copy)]
 struct FirePixel {
     index: usize,
 }
@@ -68,7 +54,7 @@ impl FirePixel {
     }
 }
 
-type FireGrid = Vec<Vec<FirePixel>>;
+type FireGrid = [[FirePixel; COLS]; ROWS];
 
 struct State {
     fire_grid: FireGrid,
@@ -78,23 +64,36 @@ impl State {
     /// Initialize a new state with a fire grid where all `FirePixel`s are black (index == 0), except for the first row,
     /// where all `FirePixels` are at full heat (index = MAX_COLOR).
     fn new() -> State {
-        let mut rows: FireGrid = Vec::with_capacity(ROWS as usize);
-        for row_idx in 0..ROWS {
-            let mut row: Vec<FirePixel> = Vec::with_capacity(COLS as usize);
-            for _ in 0..COLS {
-                let mut fire_pixel = FirePixel::new();
-                if row_idx == 0 {
-                    fire_pixel.index = MAX_COLOR
-                }
-                row.push(fire_pixel)
+        let mut fire_grid = [[FirePixel::new(); COLS]; ROWS];
+        fire_grid[0] = [FirePixel {
+            index: COLORS.len() - 1,
+        }; COLS];
+
+        State { fire_grid }
+    }
+
+    fn update(&mut self) {
+        for y in 1..ROWS {
+            for x in 0..COLS {
+                spread_fire(y, x, &mut self.fire_grid)
             }
-            rows.push(row);
         }
-        State { fire_grid: rows }
+    }
+
+    fn draw(&self, buffer: &mut [u32]) {
+        for (y, row) in self.fire_grid.iter().enumerate() {
+            for (x, fire_pixel) in row.iter().enumerate() {
+                let color = COLORS[fire_pixel.index];
+                let y = ROWS - y - 1;
+                buffer[x + y * COLS] = color;
+            }
+        }
     }
 }
 
 fn spread_fire(target_y: usize, target_x: usize, fire_grid: &mut FireGrid) {
+    let mut rng = thread_rng();
+
     // heat source
     let src_index = {
         /* heat can go sideways, so we accept the following ranges:
@@ -102,27 +101,12 @@ fn spread_fire(target_y: usize, target_x: usize, fire_grid: &mut FireGrid) {
         - x: [-1, +1] (must check boundaries)
         */
         let source_x = {
-            let modifier: i8 = thread_rng().gen_range(-1, 2);
-            match modifier {
-                -1 => {
-                    if target_x == 0 {
-                        COLS - 1
-                    } else {
-                        target_x - 1
-                    }
-                }
-                0 => target_x,
-                1 => {
-                    if target_x == COLS - 1 {
-                        0
-                    } else {
-                        target_x + 1
-                    }
-                }
-                _ => unreachable!(),
-            }
+            let modifier = rng.gen_range(-1, 2);
+            let cols = COLS as isize;
+            ((target_x as isize + modifier + cols) % cols) as usize
+            // or use mod_euc, which hasn't been stabilized yet
         };
-        let source_y = target_y - thread_rng().gen_range(0, 2);
+        let source_y = target_y - rng.gen_range(0, 2);
 
         let source_fire_pixel = &fire_grid[source_y][source_x];
         source_fire_pixel.index
@@ -130,51 +114,28 @@ fn spread_fire(target_y: usize, target_x: usize, fire_grid: &mut FireGrid) {
 
     // fire pixel visited by this iteration
     let mut target_fire_pixel = &mut fire_grid[target_y][target_x];
-    let decay: usize = thread_rng().gen_range(0, 2);
-    target_fire_pixel.index = match src_index.checked_sub(decay) {
-        Some(new_index) => new_index,
-        None => 0,
-    }
+    let decay = rng.gen_range(0, 2);
+    target_fire_pixel.index = src_index.saturating_sub(decay);
 }
 
-impl event::EventHandler for State {
-    fn update(&mut self, _ctx: &mut Context) -> GameResult<()> {
-        for y_pos in 1..ROWS {
-            for x_pos in 0..COLS {
-                spread_fire(y_pos, x_pos, &mut self.fire_grid)
-            }
-        }
-        Ok(())
-    }
-
-    fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
-        graphics::clear(ctx);
-        graphics::set_background_color(ctx, graphics::BLACK);
-
-        for y_pos in 0..ROWS {
-            for x_pos in 0..COLS {
-                let fire_pixel = &self.fire_grid[y_pos][x_pos];
-                let color = &COLORS[fire_pixel.index];
-                graphics::set_color(ctx, color.into())?;
-                let rect = graphics::Rect {
-                    x: (x_pos * SCALE) as f32,
-                    y: ((ROWS - y_pos) * SCALE) as f32, // render upside down
-                    w: SCALE as f32,
-                    h: SCALE as f32,
-                };
-                graphics::rectangle(ctx, graphics::DrawMode::Fill, rect)?
-            }
-        }
-        graphics::present(ctx);
-        Ok(())
-    }
-}
-
-pub fn main() -> GameResult<()> {
-    let cb = ContextBuilder::new("doom-fire", "tilacog")
-        .window_setup(conf::WindowSetup::default().title("doom-fire"))
-        .window_mode(conf::WindowMode::default().dimensions(WIDTH as u32, HEIGHT as u32));
-    let mut ctx = cb.build()?;
+pub fn main() -> minifb::Result<()> {
     let mut state = State::new();
-    event::run(&mut ctx, &mut state)
+    let mut buffer = [0; ROWS * COLS];
+    let mut window = Window::new(
+        "doom-fire",
+        COLS,
+        ROWS,
+        WindowOptions {
+            scale: Scale::X4,
+            ..WindowOptions::default()
+        },
+    )?;
+
+    while window.is_open() && !window.is_key_down(Key::Escape) {
+        state.update();
+        state.draw(&mut buffer);
+        window.update_with_buffer(&buffer)?;
+    }
+
+    Ok(())
 }
